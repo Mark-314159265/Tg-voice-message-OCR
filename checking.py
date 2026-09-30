@@ -26,3 +26,4 @@ for model_name in models:
         print(f"{clean_name}: успіх")
     except Exception as e:
         print(f"{clean_name}: помилка, {e}")
+        print(f"{clean_name}: помилка, {e}")
