@@ -75,7 +75,7 @@ else:
 current_model_index = 0
 models_lock = threading.Lock()
 
-MAX_RETRIES_PER_MODEL = 3  # Спроб на кожну модель перед перемиканням
+MAX_RETRIES_PER_MODEL = 3  # Кількість спроб для кожної моделі перед перемиканням
 RETRY_DELAY_SECONDS = 2    # Пауза між спробами при перевантаженні
 
 def is_retryable_error(e: Exception) -> bool:
@@ -100,7 +100,7 @@ def transcribe_audio_with_fallback(audio_bytes: bytes, status_updater=None) -> s
 
         logger.info(f"Використовується модель: {model} (модель {model_attempt + 1}/{total_models})")
 
-        # Робимо кілька спроб для поточної моделі перед перемиканням
+        # Кілька спроб на одну й ту ж модель перед перемиканням
         for retry in range(MAX_RETRIES_PER_MODEL):
             try:
                 logger.info(f"Запит до {model} (спроба {retry + 1}/{MAX_RETRIES_PER_MODEL})...")
@@ -146,14 +146,23 @@ def transcribe_audio_with_fallback(audio_bytes: bytes, status_updater=None) -> s
     raise RuntimeError(f"Всі моделі недоступні: {last_error}")
 
 # ==========================================================
-# 🌐 Health Check сервер для Render Web Service
+# 🌐 Health Check сервер для Render Web Service та UptimeRobot
 # ==========================================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        # UptimeRobot за замовчуванням надсилає HEAD-запити
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+
+    def do_POST(self):
+        self.do_GET()
 
     def log_message(self, format, *args):
         pass
