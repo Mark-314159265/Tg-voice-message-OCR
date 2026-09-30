@@ -58,17 +58,12 @@ def save_authorized_user(user_id: int):
 authorized_users = load_authorized_users()
 
 # ==========================================================
-# 🔄 Список моделей та автоперемикання при навантаженні
+# 🔄 Список моделей (лише актуальні для нових акаунтів)
 # ==========================================================
 DEFAULT_MODELS = [
     'gemini-3.8-flash',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite',
     'gemini-3.5-flash-lite',
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-flash-latest',
-    'gemini-2.5-pro'
+    'gemini-3.1-flash-lite'
 ]
 
 env_models = os.environ.get('GEMINI_MODELS')
@@ -80,12 +75,15 @@ else:
 current_model_index = 0
 models_lock = threading.Lock()
 
+MAX_RETRIES_PER_MODEL = 3  # Спроб на кожну модель перед перемиканням
+RETRY_DELAY_SECONDS = 2    # Пауза між спробами при перевантаженні
+
 def is_retryable_error(e: Exception) -> bool:
     err_str = str(e).upper()
     retryable_markers = [
         '503', 'UNAVAILABLE', 'HIGH DEMAND',
         '429', 'RESOURCE_EXHAUSTED', 'QUOTA', 'RATE_LIMIT',
-        '404', 'NOT_FOUND', '500', 'INTERNAL'
+        '500', 'INTERNAL'
     ]
     return any(marker in err_str for marker in retryable_markers)
 
@@ -96,50 +94,55 @@ def transcribe_audio_with_fallback(audio_bytes: bytes, status_updater=None) -> s
     audio_part = types.Part.from_bytes(data=audio_bytes, mime_type='audio/ogg')
     last_error = None
 
-    for attempt in range(total_models):
+    for model_attempt in range(total_models):
         with models_lock:
             model = MODELS_LIST[current_model_index]
 
-        try:
-            logger.info(f"Спроба розпізнавання через: {model} (спроба {attempt + 1}/{total_models})")
-            if status_updater and attempt > 0:
-                status_updater("⏳ Запит відправлено, очікую текст...")
+        logger.info(f"Використовується модель: {model} (модель {model_attempt + 1}/{total_models})")
 
-            response = client.models.generate_content(
-                model=model,
-                contents=[prompt, audio_part]
-            )
-
-            text = response.text or ""
-            logger.info(f"Успішно розпізнано моделлю: {model}")
-            return text.strip()
-
-        except Exception as e:
-            last_error = e
-            logger.warning(f"Модель {model} повернула помилку: {e}")
-
-            if is_retryable_error(e):
-                with models_lock:
-                    current_model_index = (current_model_index + 1) % total_models
-                    next_model = MODELS_LIST[current_model_index]
-
-                logger.info(f"Перемикаємось на наступну модель: {next_model}")
-
+        # Робимо кілька спроб для поточної моделі перед перемиканням
+        for retry in range(MAX_RETRIES_PER_MODEL):
+            try:
+                logger.info(f"Запит до {model} (спроба {retry + 1}/{MAX_RETRIES_PER_MODEL})...")
                 if status_updater:
-                    if '503' in str(e) or 'HIGH DEMAND' in str(e).upper():
-                        status_updater("⏳ Високе навантаження, змінюю модель...")
-                    elif '429' in str(e) or 'QUOTA' in str(e).upper():
-                        status_updater("⏳ Ліміт моделі вичерпано, змінюю модель...")
-                    else:
-                        status_updater("⏳ Зміна моделі, зачекайте...")
+                    status_updater("⏳ Запит відправлено, очікую текст...")
 
-                time.sleep(1)
-                continue
-            else:
-                logger.error(f"Непоправна помилка моделі {model}: {e}", exc_info=True)
-                raise e
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[prompt, audio_part]
+                )
 
-    logger.error(f"Всі моделі вичерпано. Остання помилка: {last_error}", exc_info=True)
+                text = response.text or ""
+                logger.info(f"Успішно розпізнано моделлю {model}!")
+                return text.strip()
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Модель {model} повернула помилку (спроба {retry + 1}/{MAX_RETRIES_PER_MODEL}): {e}")
+
+                if not is_retryable_error(e):
+                    logger.error(f"Непоправна помилка моделі {model}: {e}", exc_info=True)
+                    break
+
+                # Якщо є ще спроби на цю ж модель — робимо паузу
+                if retry + 1 < MAX_RETRIES_PER_MODEL:
+                    if status_updater:
+                        status_updater(f"⏳ Пікове навантаження, очікую {RETRY_DELAY_SECONDS}с перед повтором...")
+                    time.sleep(RETRY_DELAY_SECONDS)
+                else:
+                    logger.info(f"Вичерпано {MAX_RETRIES_PER_MODEL} спроб для {model}.")
+
+        # Якщо всі спроби поточної моделі вичерпані — перемикаємо на наступну модель
+        with models_lock:
+            current_model_index = (current_model_index + 1) % total_models
+            next_model = MODELS_LIST[current_model_index]
+
+        logger.info(f"🔄 Перемикаємось на наступну модель: {next_model}")
+        if status_updater:
+            status_updater("⏳ Високе навантаження, змінюю модель...")
+        time.sleep(1)
+
+    logger.error(f"Всі моделі ({', '.join(MODELS_LIST)}) вичерпали спроби. Остання помилка: {last_error}", exc_info=True)
     raise RuntimeError(f"Всі моделі недоступні: {last_error}")
 
 # ==========================================================
