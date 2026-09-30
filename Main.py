@@ -10,7 +10,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.8-flash')
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is not set in environment variables")
